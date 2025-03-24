@@ -24,6 +24,7 @@ setuptools.setup(
     packages=setuptools.find_packages() + ['flash_attn'],
     python_requires=">=3.8",
     install_requires=[
+        "einops",
         "torch>=2.6.0",
         "triton>=3.2.0",
         "packaging",
