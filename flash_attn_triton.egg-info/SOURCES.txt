@@ -1,0 +1,14 @@
+LICENSE
+README.md
+pyproject.toml
+setup.py
+flash_attn/__init__.py
+flash_attn_triton/__init__.py
+flash_attn_triton/flash_attn_interface.py
+flash_attn_triton.egg-info/PKG-INFO
+flash_attn_triton.egg-info/SOURCES.txt
+flash_attn_triton.egg-info/dependency_links.txt
+flash_attn_triton.egg-info/requires.txt
+flash_attn_triton.egg-info/top_level.txt
+flash_attn_triton/triton_kernel/__init__.py
+flash_attn_triton/triton_kernel/attention_kernel.py
