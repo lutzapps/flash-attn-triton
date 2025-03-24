@@ -41,6 +41,11 @@ def flash_attn_func(q, k, v, dropout_p=0.0, softmax_scale=None, causal=False,
     if deterministic:
         print("Warning: deterministic backward pass is not built into this Triton implementation")
     
+    # Ensure tensors are contiguous
+    q = q.contiguous() if not q.is_contiguous() else q
+    k = k.contiguous() if not k.is_contiguous() else k
+    v = v.contiguous() if not v.is_contiguous() else v
+    
     # Validate input shapes
     batch_size, seq_len_q, n_heads_q, head_dim = q.shape
     _, seq_len_k, n_heads_k, _ = k.shape
@@ -58,9 +63,9 @@ def flash_attn_func(q, k, v, dropout_p=0.0, softmax_scale=None, causal=False,
     
     # Transpose q, k, v from [batch, seq_len, heads, head_dim] to [batch, heads, seq_len, head_dim]
     # which is what the Triton implementation expects
-    q = q.transpose(1, 2)
-    k = k.transpose(1, 2)
-    v = v.transpose(1, 2)
+    q = q.transpose(1, 2).contiguous()  # Ensure contiguity after transpose
+    k = k.transpose(1, 2).contiguous()
+    v = v.transpose(1, 2).contiguous()
     
     # Compute softmax scale if not provided
     if softmax_scale is None:
@@ -70,7 +75,7 @@ def flash_attn_func(q, k, v, dropout_p=0.0, softmax_scale=None, causal=False,
     out = attention(q, k, v, causal, softmax_scale)
     
     # Transpose the output back to the expected shape [batch, seq_len, heads, head_dim]
-    out = out.transpose(1, 2)
+    out = out.transpose(1, 2).contiguous()  # Ensure output is contiguous
     
     return out
 
@@ -94,6 +99,9 @@ def flash_attn_qkvpacked_func(qkv, dropout_p=0.0, softmax_scale=None, causal=Fal
     Return:
         out: (batch_size, seqlen, nheads, headdim).
     """
+    # Ensure input is contiguous
+    qkv = qkv.contiguous() if not qkv.is_contiguous() else qkv
+    
     # Unpack qkv
     batch_size, seqlen, _, n_heads, head_dim = qkv.shape
     q, k, v = qkv.unbind(dim=2)
@@ -160,11 +168,20 @@ def flash_attn_with_kvcache(
     if alibi_slopes is not None:
         print("Warning: ALiBi is not supported in this implementation")
     
+    # Ensure inputs are contiguous
+    q = q.contiguous() if not q.is_contiguous() else q
+    k_cache = k_cache.contiguous() if not k_cache.is_contiguous() else k_cache
+    v_cache = v_cache.contiguous() if not v_cache.is_contiguous() else v_cache
+    
     # Basic implementation without proper KV cache updates
     batch_size = q.shape[0]
     
     # If we have new k and v, concatenate them to the cache (without in-place updates)
     if k is not None and v is not None:
+        # Ensure new k, v are contiguous
+        k = k.contiguous() if not k.is_contiguous() else k
+        v = v.contiguous() if not v.is_contiguous() else v
+        
         if k_cache.shape[0] != batch_size or v_cache.shape[0] != batch_size:
             raise ValueError("Batch size mismatch between query and KV cache")
         
