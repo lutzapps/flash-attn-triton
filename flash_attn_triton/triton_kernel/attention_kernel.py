@@ -607,5 +607,26 @@ def bench_flash_attention(BATCH, H, N_CTX, HEAD_DIM, causal, mode, provider, dev
     return total_flops * 1e-12 / (ms * 1e-3)
 
 
+def attention(q, k, v, causal=False, sm_scale=None):
+    """
+    Flash attention implementation using Triton.
+    
+    Args:
+        q: Query tensor of shape (batch_size, num_heads, seqlen_q, head_dim)
+        k: Key tensor of shape (batch_size, num_heads, seqlen_k, head_dim)
+        v: Value tensor of shape (batch_size, num_heads, seqlen_v, head_dim)
+        causal: If True, applies causal masking
+        sm_scale: Softmax scaling factor
+        
+    Returns:
+        output: Attention output of shape (batch_size, num_heads, seqlen_q, head_dim)
+    """
+    if sm_scale is None:
+        sm_scale = 1.0 / math.sqrt(q.shape[-1])
+    
+    # Call the autograd function
+    return _attention.apply(q, k, v, causal, sm_scale)
+
+
 if __name__ == "__main__":
     bench_flash_attention.run(save_path=".", print_data=True)
