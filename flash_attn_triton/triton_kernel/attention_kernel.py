@@ -467,7 +467,8 @@ class _attention(torch.autograd.Function):
     @staticmethod
     def backward(ctx, do):
         q, k, v, o, M = ctx.saved_tensors
-        assert do.is_contiguous()
+        if not do.is_contiguous():
+            do = do.contiguous()
         assert q.stride() == k.stride() == v.stride() == o.stride() == do.stride()
         dq = torch.empty_like(q)
         dk = torch.empty_like(k)
