@@ -79,7 +79,7 @@ configs = [
     triton.Config({'BLOCK_M': BM, 'BLOCK_N': BN}, num_stages=s, num_warps=w) \
     for BM in [64, 128]\
     for BN in [32, 64]\
-    for s in ([1] if is_hip() else [3, 4, 7])\
+    for s in ([3, 4, 7])\
     for w in [4, 8]\
 ]
 
@@ -121,7 +121,7 @@ def _attn_fwd(Q, K, V, sm_scale, M, Out,  #
         block_shape=(BLOCK_M, HEAD_DIM),
         order=(1, 0),
     )
-    v_order: tl.constexpr = (0, 1) if V.dtype.element_ty == tl.float8e5 else (1, 0)
+    v_order: tl.constexpr = (1, 0)
     V_block_ptr = tl.make_block_ptr(
         base=V + qvk_offset,
         shape=(N_CTX, HEAD_DIM),
@@ -165,8 +165,7 @@ def _attn_fwd(Q, K, V, sm_scale, M, Out,  #
         acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q, K_block_ptr, V_block_ptr,  #
                                         start_m, qk_scale,  #
                                         BLOCK_M, HEAD_DIM, BLOCK_N,  #
-                                        4 - STAGE, offs_m, offs_n, N_CTX, V.dtype.element_ty == tl.float8e5  #
-                                        )
+                                        4 - STAGE, offs_m, offs_n, N_CTX)
     # stage 2: on-band
     if STAGE & 2:
         # barrier makes it easier for compielr to schedule the
@@ -174,8 +173,7 @@ def _attn_fwd(Q, K, V, sm_scale, M, Out,  #
         acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q, K_block_ptr, V_block_ptr,  #
                                         start_m, qk_scale,  #
                                         BLOCK_M, HEAD_DIM, BLOCK_N,  #
-                                        2, offs_m, offs_n, N_CTX, V.dtype.element_ty == tl.float8e5  #
-                                        )
+                                        2, offs_m, offs_n, N_CTX)
     # epilogue
     m_i += tl.math.log2(l_i)
     acc = acc / l_i[:, None]

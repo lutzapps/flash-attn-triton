@@ -21,11 +21,12 @@ setuptools.setup(
         "License :: OSI Approved :: BSD License",
         "Operating System :: OS Independent",
     ],
-    packages=setuptools.find_packages(),
+    packages=setuptools.find_packages() + ['flash_attn'],
     python_requires=">=3.8",
     install_requires=[
         "torch>=2.6.0",
         "triton>=3.2.0",
         "packaging",
+        "pytest"
     ],
 )
