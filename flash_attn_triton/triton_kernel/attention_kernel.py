@@ -1,7 +1,7 @@
 """
 Fused Attention with Dropout
 ===============
- 
+
 This is a Triton implementation of the Flash Attention v2 algorithm from Tri Dao (https://tridao.me/publications/flash2/flash2.pdf)
 
 Credits: OpenAI kernel team
@@ -29,7 +29,7 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
                     dropout_p, dropout_seed,  #
                     BLOCK_M: tl.constexpr, HEAD_DIM: tl.constexpr, BLOCK_N: tl.constexpr,  #
                     STAGE: tl.constexpr, offs_m: tl.constexpr, offs_n: tl.constexpr,  #
-                    N_CTX: tl.constexpr):
+                    N_CTX: tl.constexpr, USE_DROPOUT: tl.constexpr):
     # range of values handled by this stage
     if STAGE == 1:
         lo, hi = 0, start_m * BLOCK_M
@@ -57,8 +57,8 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
             qk = qk * qk_scale - m_ij[:, None]
         p = tl.math.exp2(qk)
         
-        # -- apply dropout --
-        if dropout_p > 0.0:
+        # -- apply dropout if specified at compile time --
+        if USE_DROPOUT:
             # Create a unique offset for each element in the p matrix
             # The offset needs to be unique across both dimensions of p
             row_offsets = offs_m[:, None] + start_m * BLOCK_M
@@ -121,7 +121,8 @@ def _attn_fwd(Q, K, V, sm_scale, dropout_p, dropout_seed, M, Out,  #
               HEAD_DIM: tl.constexpr,  #
               BLOCK_M: tl.constexpr,  #
               BLOCK_N: tl.constexpr,  #
-              STAGE: tl.constexpr  #
+              STAGE: tl.constexpr,  #
+              USE_DROPOUT: tl.constexpr  #
               ):
     tl.static_assert(BLOCK_N <= HEAD_DIM)
     start_m = tl.program_id(0)
@@ -183,7 +184,7 @@ def _attn_fwd(Q, K, V, sm_scale, dropout_p, dropout_seed, M, Out,  #
         acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q, K_block_ptr, V_block_ptr,  #
                                         start_m, qk_scale, dropout_p, dropout_seed,  #
                                         BLOCK_M, HEAD_DIM, BLOCK_N,  #
-                                        4 - STAGE, offs_m, offs_n, N_CTX)
+                                        4 - STAGE, offs_m, offs_n, N_CTX, USE_DROPOUT)
     # stage 2: on-band
     if STAGE & 2:
         # barrier makes it easier for compielr to schedule the
@@ -191,7 +192,7 @@ def _attn_fwd(Q, K, V, sm_scale, dropout_p, dropout_seed, M, Out,  #
         acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q, K_block_ptr, V_block_ptr,  #
                                         start_m, qk_scale, dropout_p, dropout_seed,  #
                                         BLOCK_M, HEAD_DIM, BLOCK_N,  #
-                                        2, offs_m, offs_n, N_CTX)
+                                        2, offs_m, offs_n, N_CTX, USE_DROPOUT)
     # epilogue
     m_i += tl.math.log2(l_i)
     acc = acc / l_i[:, None]
@@ -231,7 +232,7 @@ def _attn_bwd_dkdv(dk, dv,  #
                    HEAD_DIM: tl.constexpr,  #
                    # Filled in by the wrapper.
                    start_n, start_m, num_steps,  #
-                   MASK: tl.constexpr):
+                   MASK: tl.constexpr, USE_DROPOUT: tl.constexpr):
     offs_m = start_m + tl.arange(0, BLOCK_M1)
     offs_n = start_n + tl.arange(0, BLOCK_N1)
     offs_k = tl.arange(0, HEAD_DIM)
@@ -254,7 +255,7 @@ def _attn_bwd_dkdv(dk, dv,  #
             pT = tl.where(mask, pT, 0.0)
             
         # Apply the same dropout mask for backward pass
-        if dropout_p > 0.0:
+        if USE_DROPOUT:
             # Create unique offsets for the dropout mask
             row_offsets = offs_m[None, :]
             col_offsets = offs_n[:, None]
@@ -298,7 +299,7 @@ def _attn_bwd_dq(dq, q, K, V,  #
                  HEAD_DIM: tl.constexpr,
                  # Filled in by the wrapper.
                  start_m, start_n, num_steps,  #
-                 MASK: tl.constexpr):
+                 MASK: tl.constexpr, USE_DROPOUT: tl.constexpr):
     offs_m = start_m + tl.arange(0, BLOCK_M2)
     offs_n = start_n + tl.arange(0, BLOCK_N2)
     offs_k = tl.arange(0, HEAD_DIM)
@@ -322,7 +323,7 @@ def _attn_bwd_dq(dq, q, K, V,  #
             p = tl.where(mask, p, 0.0)
             
         # Apply dropout mask for backward pass
-        if dropout_p > 0.0:
+        if USE_DROPOUT:
             # Create unique offsets for the dropout mask
             row_offsets = offs_m[:, None]
             col_offsets = curr_n + tl.arange(0, BLOCK_N2)[None, :]
@@ -362,7 +363,8 @@ def _attn_bwd(Q, K, V, sm_scale,  #
               BLOCK_M2: tl.constexpr,  #
               BLOCK_N2: tl.constexpr,  #
               BLK_SLICE_FACTOR: tl.constexpr,  #
-              HEAD_DIM: tl.constexpr):
+              HEAD_DIM: tl.constexpr,
+              USE_DROPOUT: tl.constexpr):
     LN2: tl.constexpr = 0.6931471824645996  # = ln(2)
 
     bhid = tl.program_id(2)
@@ -408,7 +410,7 @@ def _attn_bwd(Q, K, V, sm_scale,  #
                             H, N_CTX,  #
                             MASK_BLOCK_M1, BLOCK_N1, HEAD_DIM,  #
                             start_n, start_m, num_steps,  #
-                            MASK=True  #
+                            MASK=True, USE_DROPOUT=USE_DROPOUT  #
                             )
 
     start_m += num_steps * MASK_BLOCK_M1
@@ -425,7 +427,7 @@ def _attn_bwd(Q, K, V, sm_scale,  #
         H, N_CTX,  #
         BLOCK_M1, BLOCK_N1, HEAD_DIM,  #
         start_n, start_m, num_steps,  #
-        MASK=False  #
+        MASK=False, USE_DROPOUT=USE_DROPOUT  #
     )
 
     dv_ptrs = DV + offs_n[:, None] * stride_tok + offs_k[None, :] * stride_d
@@ -463,7 +465,7 @@ def _attn_bwd(Q, K, V, sm_scale,  #
                       H, N_CTX,  #
                       BLOCK_M2, MASK_BLOCK_N2, HEAD_DIM,  #
                       start_m, end_n - num_steps * MASK_BLOCK_N2, num_steps,  #
-                      MASK=True  #
+                      MASK=True, USE_DROPOUT=USE_DROPOUT  #
                       )
     end_n -= num_steps * MASK_BLOCK_N2
     # stage 2
@@ -475,7 +477,7 @@ def _attn_bwd(Q, K, V, sm_scale,  #
                       H, N_CTX,  #
                       BLOCK_M2, BLOCK_N2, HEAD_DIM,  #
                       start_m, end_n - num_steps * BLOCK_N2, num_steps,  #
-                      MASK=False  #
+                      MASK=False, USE_DROPOUT=USE_DROPOUT  #
                       )
     # Write back dQ.
     dq_ptrs = DQ + offs_m[:, None] * stride_tok + offs_k[None, :] * stride_d
@@ -499,6 +501,10 @@ class _attention(torch.autograd.Function):
         M = torch.empty((q.shape[0], q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
         grid = lambda args: (triton.cdiv(q.shape[2], args["BLOCK_M"]), q.shape[0] * q.shape[1], 1)
         ctx.grid = grid
+        
+        # Determine if we should use dropout at compile time
+        USE_DROPOUT = dropout_p > 0.0
+        
         _attn_fwd[grid](
             q, k, v, sm_scale, dropout_p, dropout_seed, M, o,  #
             q.stride(0), q.stride(1), q.stride(2), q.stride(3),  #
@@ -509,6 +515,7 @@ class _attention(torch.autograd.Function):
             N_CTX=q.shape[2],  #
             HEAD_DIM=HEAD_DIM_K,  #
             STAGE=stage,  #
+            USE_DROPOUT=USE_DROPOUT,  #
             **extra_kern_args)
 
         ctx.save_for_backward(q, k, v, o, M)
@@ -517,6 +524,7 @@ class _attention(torch.autograd.Function):
         ctx.causal = causal
         ctx.dropout_p = dropout_p
         ctx.dropout_seed = dropout_seed
+        ctx.use_dropout = USE_DROPOUT  # Store for backward pass
         return o
 
     @staticmethod
@@ -557,6 +565,7 @@ class _attention(torch.autograd.Function):
             BLOCK_M2=BLOCK_M2, BLOCK_N2=BLOCK_N2,  #
             BLK_SLICE_FACTOR=BLK_SLICE_FACTOR,  #
             HEAD_DIM=ctx.HEAD_DIM,  #
+            USE_DROPOUT=ctx.use_dropout,  #
             num_warps=NUM_WARPS,  #
             num_stages=NUM_STAGES  #
         )
@@ -588,7 +597,6 @@ def attention(q, k, v, causal=False, sm_scale=None, dropout_p=0.0, dropout_seed=
     
     # Call the autograd function
     return _attention.apply(q, k, v, causal, sm_scale, dropout_p, dropout_seed)
-
 
 
 @pytest.mark.parametrize("Z, H, N_CTX, HEAD_DIM", [(1, 2, 1024, 64)])
