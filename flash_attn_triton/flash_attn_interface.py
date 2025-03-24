@@ -111,6 +111,40 @@ def flash_attn_qkvpacked_func(qkv, dropout_p=0.0, softmax_scale=None, causal=Fal
         q, k, v, dropout_p, softmax_scale, causal, window_size, alibi_slopes, deterministic
     )
 
+
+def flash_attn_kvpacked_func(q, kv, dropout_p=0.0, softmax_scale=None, causal=False,
+                             window_size=(-1, -1), alibi_slopes=None, deterministic=False):
+    """Flash Attention for packed KV using Triton kernel.
+    
+    Arguments:
+        q: (batch_size, seqlen_q, nheads, headdim)
+        kv: (batch_size, seqlen_k, 2, nheads_k, headdim)
+        dropout_p: float. Dropout probability (not supported in this implementation).
+        softmax_scale: float. The scaling of QK^T before applying softmax.
+            Default to 1 / sqrt(headdim).
+        causal: bool. Whether to apply causal attention mask.
+        window_size: (left, right). If not (-1, -1), implements sliding window local attention
+            (not supported in this implementation).
+        alibi_slopes: (nheads,) or (batch_size, nheads), fp32. For ALiBi attention bias
+            (not supported in this implementation).
+        deterministic: bool. Whether to use the deterministic implementation of the backward pass
+            (not supported in this implementation).
+            
+    Return:
+        out: (batch_size, seqlen_q, nheads, headdim).
+    """
+    # Ensure KV is contiguous
+    kv = kv.contiguous() if not kv.is_contiguous() else kv
+    
+    # Unpack kv
+    k, v = kv.unbind(dim=2)
+    
+    # Call the unpacked version
+    return flash_attn_func(
+        q, k, v, dropout_p, softmax_scale, causal, window_size, alibi_slopes, deterministic
+    )
+
+
 def flash_attn_with_kvcache(
     q,
     k_cache,
