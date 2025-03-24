@@ -47,9 +47,10 @@ def create_test_inputs(batch_size=2, seq_len=1024, num_heads=8, head_dim=64, dty
     """Create test inputs for comparison."""
     torch.manual_seed(42)  # For reproducibility
     
-    q = torch.randn(batch_size, seq_len, num_heads, head_dim, device=device, dtype=dtype)
-    k = torch.randn(batch_size, seq_len, num_heads, head_dim, device=device, dtype=dtype)
-    v = torch.randn(batch_size, seq_len, num_heads, head_dim, device=device, dtype=dtype)
+    # Create tensors with requires_grad=True
+    q = torch.randn(batch_size, seq_len, num_heads, head_dim, device=device, dtype=dtype, requires_grad=True)
+    k = torch.randn(batch_size, seq_len, num_heads, head_dim, device=device, dtype=dtype, requires_grad=True)
+    v = torch.randn(batch_size, seq_len, num_heads, head_dim, device=device, dtype=dtype, requires_grad=True)
     
     return q, k, v
 
@@ -58,6 +59,10 @@ def compare_outputs(causal=True, softmax_scale=None, atol=1e-3, rtol=1e-3):
     print(f"Testing {'causal' if causal else 'non-causal'} attention:")
     
     q, k, v = create_test_inputs()
+    
+    # Make sure tensors require grad
+    for tensor in [q, k, v]:
+        assert tensor.requires_grad, "Input tensor doesn't have requires_grad=True"
     
     # Run our implementation
     try:
@@ -69,8 +74,12 @@ def compare_outputs(causal=True, softmax_scale=None, atol=1e-3, rtol=1e-3):
     
     # Run original implementation if available
     if original_available:
+        # Need to create fresh inputs for the original implementation to avoid 
+        # gradient accumulation issues when comparing
+        q_orig, k_orig, v_orig = create_test_inputs()
+        
         try:
-            original_output = original_flash_attn_func(q, k, v, causal=causal, softmax_scale=softmax_scale)
+            original_output = original_flash_attn_func(q_orig, k_orig, v_orig, causal=causal, softmax_scale=softmax_scale)
             print(f"Original implementation output shape: {original_output.shape}")
         except Exception as e:
             print(f"ERROR in original implementation: {str(e)}")
@@ -86,16 +95,22 @@ def compare_outputs(causal=True, softmax_scale=None, atol=1e-3, rtol=1e-3):
             
             # Compare gradients
             sum_output = our_output.sum()
-            sum_output.backward(retain_graph=True)
+            sum_output.backward()
             our_grads = [q.grad.clone(), k.grad.clone(), v.grad.clone()]
+            
+            # Clear gradients
             q.grad, k.grad, v.grad = None, None, None
             
             sum_output_original = original_output.sum()
             sum_output_original.backward()
-            original_grads = [q.grad, k.grad, v.grad]
+            original_grads = [q_orig.grad, k_orig.grad, v_orig.grad]
             
             for i, (our_grad, original_grad) in enumerate(zip(our_grads, original_grads)):
                 param_name = ["q", "k", "v"][i]
+                if our_grad is None or original_grad is None:
+                    print(f"❌ {param_name} gradient is None")
+                    continue
+                    
                 grad_max_diff = torch.max(torch.abs(our_grad - original_grad)).item()
                 if torch.allclose(our_grad, original_grad, atol=atol, rtol=rtol):
                     print(f"✅ {param_name} gradients match! Maximum absolute difference: {grad_max_diff:.6f}")
