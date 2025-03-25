@@ -11,6 +11,7 @@ from .triton_kernel.attention_kernel import attention
 
 def flash_attn_func(q, k, v, dropout_p=0.0, softmax_scale=None, causal=False,
                     window_size=(-1, -1), alibi_slopes=None, deterministic=False,
+                    softcap=0.0,
                     return_attn_probs=False):
     """Flash Attention implementation using Triton kernel.
     
@@ -35,12 +36,12 @@ def flash_attn_func(q, k, v, dropout_p=0.0, softmax_scale=None, causal=False,
         out: (batch_size, seqlen, nheads, headdim).
     """
     # Check unsupported features
-    if dropout_p > 0.0:
-        print("Warning: dropout is not supported in this Triton implementation")
     if window_size != (-1, -1):
-        print("Warning: sliding window attention is not supported in this Triton implementation")
+        raise ValueError("Warning: sliding window attention is not supported in this Triton implementation")
     if alibi_slopes is not None:
-        print("Warning: ALiBi is not supported in this Triton implementation")
+        raise ValueError("Warning: ALiBi is not supported in this Triton implementation")
+    if softcap != 0.0:
+        raise ValueError("Warning: Softcap is not supported in this Triton implementation")
     if deterministic:
         print("Warning: deterministic backward pass is not built into this Triton implementation")
     if return_attn_probs:
@@ -89,7 +90,7 @@ def flash_attn_func(q, k, v, dropout_p=0.0, softmax_scale=None, causal=False,
         return out
 
 def flash_attn_qkvpacked_func(qkv, dropout_p=0.0, softmax_scale=None, causal=False,
-                              window_size=(-1, -1), alibi_slopes=None, deterministic=False,
+                              window_size=(-1, -1), alibi_slopes=None, deterministic=False, softcap=0.0,
                               return_attn_probs=False):
     """Flash Attention for packed QKV using Triton kernel.
     
@@ -120,12 +121,13 @@ def flash_attn_qkvpacked_func(qkv, dropout_p=0.0, softmax_scale=None, causal=Fal
     
     # Call the unpacked version
     return flash_attn_func(
-        q, k, v, dropout_p, softmax_scale, causal, window_size, alibi_slopes, deterministic, return_attn_probs
+        q, k, v, dropout_p, softmax_scale, causal, window_size, alibi_slopes, deterministic, softcap, return_attn_probs
     )
 
 
 def flash_attn_kvpacked_func(q, kv, dropout_p=0.0, softmax_scale=None, causal=False,
-                             window_size=(-1, -1), alibi_slopes=None, deterministic=False):
+                             window_size=(-1, -1), alibi_slopes=None, deterministic=False,
+                             softcap=0.0, return_attn_probs=False):
     """Flash Attention for packed KV using Triton kernel.
     
     Arguments:
@@ -153,7 +155,7 @@ def flash_attn_kvpacked_func(q, kv, dropout_p=0.0, softmax_scale=None, causal=Fa
     
     # Call the unpacked version
     return flash_attn_func(
-        q, k, v, dropout_p, softmax_scale, causal, window_size, alibi_slopes, deterministic
+        q, k, v, dropout_p, softmax_scale, causal, window_size, alibi_slopes, deterministic, softcap, return_attn_probs
     )
 
 

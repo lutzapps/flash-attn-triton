@@ -29,7 +29,7 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
                     dropout_p, dropout_seed,  #
                     BLOCK_M: tl.constexpr, HEAD_DIM: tl.constexpr, BLOCK_N: tl.constexpr,  #
                     STAGE: tl.constexpr, offs_m: tl.constexpr, offs_n: tl.constexpr,  #
-                    N_CTX: tl.constexpr, USE_DROPOUT: tl.constexpr):
+                    N_CTX: tl.constexpr, USE_DROPOUT: tl.constexpr, IS_BF16: tl.constexpr):
     # range of values handled by this stage
     if STAGE == 1:
         lo, hi = 0, start_m * BLOCK_M
@@ -83,7 +83,10 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
         acc = acc * alpha[:, None]
         # update acc
         v = tl.load(V_block_ptr)
-        p = p.to(tl.float16)
+        if IS_BF16:
+            p = p.to(tl.bfloat16)
+        else:
+            p = p.to(tl.float16)
         acc = tl.dot(p, v, acc)
         # update m_i and l_i
         m_i = m_ij
@@ -97,9 +100,9 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
 # re-tuning.
 configs = [
     triton.Config({'BLOCK_M': BM, 'BLOCK_N': BN}, num_stages=s, num_warps=w) \
-    for BM in [64, 128]\
-    for BN in [32, 64]\
-    for s in ([3, 4, 7])\
+    for BM in [32, 64, 128]\
+    for BN in [16, 32, 64]\
+    for s in ([3, 4, 5, 7])\
     for w in [4, 8]\
 ]
 
@@ -108,6 +111,8 @@ def keep(conf):
     BLOCK_M = conf.kwargs["BLOCK_M"]
     BLOCK_N = conf.kwargs["BLOCK_N"]
     if BLOCK_M * BLOCK_N < 128 * 128 and conf.num_warps == 8:
+        return False
+    if BLOCK_M < BLOCK_N:
         return False
     return True
 
@@ -124,7 +129,8 @@ def _attn_fwd(Q, K, V, sm_scale, dropout_p, dropout_seed, M, Out,  #
               BLOCK_M: tl.constexpr,  #
               BLOCK_N: tl.constexpr,  #
               STAGE: tl.constexpr,  #
-              USE_DROPOUT: tl.constexpr  #
+              USE_DROPOUT: tl.constexpr,  #
+              IS_BF16: tl.constexpr
               ):
     tl.static_assert(BLOCK_N <= HEAD_DIM)
     start_m = tl.program_id(0)
@@ -186,7 +192,8 @@ def _attn_fwd(Q, K, V, sm_scale, dropout_p, dropout_seed, M, Out,  #
         acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q, K_block_ptr, V_block_ptr,  #
                                         start_m, qk_scale, dropout_p, dropout_seed,  #
                                         BLOCK_M, HEAD_DIM, BLOCK_N,  #
-                                        4 - STAGE, offs_m, offs_n, N_CTX, USE_DROPOUT)
+                                        4 - STAGE, offs_m, offs_n, N_CTX, USE_DROPOUT,
+                                        IS_BF16)
     # stage 2: on-band
     if STAGE & 2:
         # barrier makes it easier for compielr to schedule the
@@ -194,7 +201,8 @@ def _attn_fwd(Q, K, V, sm_scale, dropout_p, dropout_seed, M, Out,  #
         acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q, K_block_ptr, V_block_ptr,  #
                                         start_m, qk_scale, dropout_p, dropout_seed,  #
                                         BLOCK_M, HEAD_DIM, BLOCK_N,  #
-                                        2, offs_m, offs_n, N_CTX, USE_DROPOUT)
+                                        2, offs_m, offs_n, N_CTX, USE_DROPOUT,
+                                        IS_BF16)
     # epilogue
     m_i += tl.math.log2(l_i)
     acc = acc / l_i[:, None]
@@ -247,7 +255,8 @@ def _attn_bwd_dkdv(dk, dv,  #
                    HEAD_DIM: tl.constexpr,  #
                    # Filled in by the wrapper.
                    start_n, start_m, num_steps,  #
-                   MASK: tl.constexpr, USE_DROPOUT: tl.constexpr):
+                   MASK: tl.constexpr, USE_DROPOUT: tl.constexpr,
+                   IS_BF16: tl.constexpr):
     offs_m = start_m + tl.arange(0, BLOCK_M1)
     offs_n = start_n + tl.arange(0, BLOCK_N1)
     offs_k = tl.arange(0, HEAD_DIM)
@@ -286,14 +295,20 @@ def _attn_bwd_dkdv(dk, dv,  #
         do = tl.load(do_ptrs)
         # Compute dV.
         ppT = pT
-        ppT = ppT.to(tl.float16)
+        if IS_BF16:
+            ppT = ppT.to(tl.bfloat16)
+        else:
+            ppT = ppT.to(tl.float16)
         dv += tl.dot(ppT, do)
         # D (= delta) is pre-divided by ds_scale.
         Di = tl.load(D + offs_m)
         # Compute dP and dS.
         dpT = tl.dot(v, tl.trans(do)).to(tl.float32)
         dsT = pT * (dpT - Di[None, :])
-        dsT = dsT.to(tl.float16)
+        if IS_BF16:
+            dsT = dsT.to(tl.bfloat16)
+        else:
+            dsT = dsT.to(tl.float16)
         dk += tl.dot(dsT, tl.trans(qT))
         # Increment pointers.
         curr_m += step_m
@@ -315,7 +330,8 @@ def _attn_bwd_dq(dq, q, K, V,  #
                  HEAD_DIM: tl.constexpr,
                  # Filled in by the wrapper.
                  start_m, start_n, num_steps,  #
-                 MASK: tl.constexpr, USE_DROPOUT: tl.constexpr):
+                 MASK: tl.constexpr, USE_DROPOUT: tl.constexpr,
+                 IS_BF16: tl.constexpr):
     offs_m = start_m + tl.arange(0, BLOCK_M2)
     offs_n = start_n + tl.arange(0, BLOCK_N2)
     offs_k = tl.arange(0, HEAD_DIM)
@@ -355,7 +371,10 @@ def _attn_bwd_dq(dq, q, K, V,  #
         # Compute dP and dS.
         dp = tl.dot(do, vT).to(tl.float32)
         ds = p * (dp - Di[:, None])
-        ds = ds.to(tl.float16)
+        if IS_BF16:
+            ds = ds.to(tl.bfloat16)
+        else:
+            ds = ds.to(tl.float16)
         # Compute dQ.
         # NOTE: We need to de-scale dq in the end, because kT was pre-scaled.
         dq += tl.dot(ds, tl.trans(kT))
@@ -382,7 +401,8 @@ def _attn_bwd(Q, K, V, sm_scale,  #
               BLK_SLICE_FACTOR: tl.constexpr,  #
               HEAD_DIM: tl.constexpr,
               USE_DROPOUT: tl.constexpr,
-              CAUSAL: tl.constexpr):
+              CAUSAL: tl.constexpr,
+              IS_BF16: tl.constexpr):
     LN2: tl.constexpr = 0.6931471824645996  # = ln(2)
 
     bhid = tl.program_id(2)
@@ -428,7 +448,8 @@ def _attn_bwd(Q, K, V, sm_scale,  #
                             H, N_CTX,  #
                             MASK_BLOCK_M1, BLOCK_N1, HEAD_DIM,  #
                             start_n, start_m, num_steps,  #
-                            MASK=CAUSAL, USE_DROPOUT=USE_DROPOUT  #
+                            MASK=CAUSAL, USE_DROPOUT=USE_DROPOUT,
+                            IS_BF16=IS_BF16
                             )
 
     start_m += num_steps * MASK_BLOCK_M1
@@ -445,7 +466,8 @@ def _attn_bwd(Q, K, V, sm_scale,  #
         H, N_CTX,  #
         BLOCK_M1, BLOCK_N1, HEAD_DIM,  #
         start_n, start_m, num_steps,  #
-        MASK=False, USE_DROPOUT=USE_DROPOUT  #
+        MASK=False, USE_DROPOUT=USE_DROPOUT,
+        IS_BF16=IS_BF16 #
     )
 
     dv_ptrs = DV + offs_n[:, None] * stride_tok + offs_k[None, :] * stride_d
@@ -483,7 +505,8 @@ def _attn_bwd(Q, K, V, sm_scale,  #
                       H, N_CTX,  #
                       BLOCK_M2, MASK_BLOCK_N2, HEAD_DIM,  #
                       start_m, end_n - num_steps * MASK_BLOCK_N2, num_steps,  #
-                      MASK=CAUSAL, USE_DROPOUT=USE_DROPOUT  #
+                      MASK=CAUSAL, USE_DROPOUT=USE_DROPOUT,  #
+                      IS_BF16=IS_BF16
                       )
     end_n -= num_steps * MASK_BLOCK_N2
     # stage 2
@@ -495,7 +518,8 @@ def _attn_bwd(Q, K, V, sm_scale,  #
                       H, N_CTX,  #
                       BLOCK_M2, BLOCK_N2, HEAD_DIM,  #
                       start_m, end_n - num_steps * BLOCK_N2, num_steps,  #
-                      MASK=False, USE_DROPOUT=USE_DROPOUT  #
+                      MASK=False, USE_DROPOUT=USE_DROPOUT,  #
+                      IS_BF16=IS_BF16
                       )
     # Write back dQ.
     dq_ptrs = DQ + offs_m[:, None] * stride_tok + offs_k[None, :] * stride_d
@@ -534,6 +558,7 @@ class _attention(torch.autograd.Function):
             HEAD_DIM=HEAD_DIM_K,  #
             STAGE=stage,  #
             USE_DROPOUT=USE_DROPOUT,  #
+            IS_BF16=(True if q.dtype == torch.bfloat16 else False),
             **extra_kern_args)
 
         ctx.save_for_backward(q, k, v, o, M)
@@ -557,8 +582,8 @@ class _attention(torch.autograd.Function):
         BATCH, N_HEAD, N_CTX = q.shape[:3]
         PRE_BLOCK = 128
         NUM_WARPS, NUM_STAGES = 4, 3
-        BLOCK_M1, BLOCK_N1, BLOCK_M2, BLOCK_N2 = 32, 128, 128, 32
-        BLK_SLICE_FACTOR = 2
+        BLOCK_M1, BLOCK_N1, BLOCK_M2, BLOCK_N2 = 32, 64, 128, 32
+        BLK_SLICE_FACTOR = 1
         RCP_LN2 = 1.4426950408889634  # = 1.0 / ln(2)
         arg_k = k
         arg_k = arg_k * (ctx.sm_scale * RCP_LN2)
@@ -590,7 +615,8 @@ class _attention(torch.autograd.Function):
             USE_DROPOUT=ctx.use_dropout,  #
             CAUSAL=ctx.causal,      #
             num_warps=NUM_WARPS,  #
-            num_stages=NUM_STAGES  #
+            num_stages=NUM_STAGES,  #
+            IS_BF16=(True if q.dtype == torch.bfloat16 else False)
         )
 
         return dq, dk, dv, None, None, None, None
