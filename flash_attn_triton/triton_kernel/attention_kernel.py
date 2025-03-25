@@ -381,7 +381,8 @@ def _attn_bwd(Q, K, V, sm_scale,  #
               BLOCK_N2: tl.constexpr,  #
               BLK_SLICE_FACTOR: tl.constexpr,  #
               HEAD_DIM: tl.constexpr,
-              USE_DROPOUT: tl.constexpr):
+              USE_DROPOUT: tl.constexpr,
+              CAUSAL: tl.constexpr):
     LN2: tl.constexpr = 0.6931471824645996  # = ln(2)
 
     bhid = tl.program_id(2)
@@ -427,7 +428,7 @@ def _attn_bwd(Q, K, V, sm_scale,  #
                             H, N_CTX,  #
                             MASK_BLOCK_M1, BLOCK_N1, HEAD_DIM,  #
                             start_n, start_m, num_steps,  #
-                            MASK=True, USE_DROPOUT=USE_DROPOUT  #
+                            MASK=CAUSAL, USE_DROPOUT=USE_DROPOUT  #
                             )
 
     start_m += num_steps * MASK_BLOCK_M1
@@ -482,7 +483,7 @@ def _attn_bwd(Q, K, V, sm_scale,  #
                       H, N_CTX,  #
                       BLOCK_M2, MASK_BLOCK_N2, HEAD_DIM,  #
                       start_m, end_n - num_steps * MASK_BLOCK_N2, num_steps,  #
-                      MASK=True, USE_DROPOUT=USE_DROPOUT  #
+                      MASK=CAUSAL, USE_DROPOUT=USE_DROPOUT  #
                       )
     end_n -= num_steps * MASK_BLOCK_N2
     # stage 2
@@ -587,6 +588,7 @@ class _attention(torch.autograd.Function):
             BLK_SLICE_FACTOR=BLK_SLICE_FACTOR,  #
             HEAD_DIM=ctx.HEAD_DIM,  #
             USE_DROPOUT=ctx.use_dropout,  #
+            CAUSAL=ctx.causal,      #
             num_warps=NUM_WARPS,  #
             num_stages=NUM_STAGES  #
         )
