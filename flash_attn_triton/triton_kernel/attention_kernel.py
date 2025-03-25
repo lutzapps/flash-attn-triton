@@ -209,15 +209,28 @@ def _attn_bwd_preprocess(O, DO,  #
                          Z, H, N_CTX,  #
                          BLOCK_M: tl.constexpr, HEAD_DIM: tl.constexpr  #
                          ):
-    off_m = tl.program_id(0) * BLOCK_M + tl.arange(0, BLOCK_M)
+    # Calculate starting position
+    start_idx = tl.program_id(0) * BLOCK_M
+    # Get offsets and create mask for valid positions
+    off_m = start_idx + tl.arange(0, BLOCK_M)
     off_hz = tl.program_id(1)
     off_n = tl.arange(0, HEAD_DIM)
-    # load
-    o = tl.load(O + off_hz * HEAD_DIM * N_CTX + off_m[:, None] * HEAD_DIM + off_n[None, :])
-    do = tl.load(DO + off_hz * HEAD_DIM * N_CTX + off_m[:, None] * HEAD_DIM + off_n[None, :]).to(tl.float32)
+    
+    # Create mask for valid positions (where offset < N_CTX)
+    mask = off_m < N_CTX
+    
+    # Clamp offsets to stay within bounds
+    off_m_valid = tl.where(mask, off_m, N_CTX - 1)
+    
+    # Load with mask
+    o = tl.load(O + off_hz * HEAD_DIM * N_CTX + off_m_valid[:, None] * HEAD_DIM + off_n[None, :])
+    do = tl.load(DO + off_hz * HEAD_DIM * N_CTX + off_m_valid[:, None] * HEAD_DIM + off_n[None, :]).to(tl.float32)
+    
+    # Compute delta
     delta = tl.sum(o * do, axis=1)
-    # write-back
-    tl.store(Delta + off_hz * N_CTX + off_m, delta)
+    
+    # Store with mask
+    tl.store(Delta + off_hz * N_CTX + off_m_valid, delta, mask=mask)
 
 
 # The main inner-loop logic for computing dK and dV.
@@ -530,7 +543,7 @@ class _attention(torch.autograd.Function):
         ctx.dropout_seed = dropout_seed
         ctx.use_dropout = USE_DROPOUT  # Store for backward pass
         return o
-
+    
     @staticmethod
     def backward(ctx, do):
         q, k, v, o, M = ctx.saved_tensors
@@ -548,9 +561,11 @@ class _attention(torch.autograd.Function):
         RCP_LN2 = 1.4426950408889634  # = 1.0 / ln(2)
         arg_k = k
         arg_k = arg_k * (ctx.sm_scale * RCP_LN2)
-        PRE_BLOCK = 128
-        assert N_CTX % PRE_BLOCK == 0
-        pre_grid = (N_CTX // PRE_BLOCK, BATCH * N_HEAD)
+
+        # Use triton.cdiv to handle non-divisible sequence lengths:
+        pre_grid = (triton.cdiv(N_CTX, PRE_BLOCK), BATCH * N_HEAD)
+
+        # pre_grid = (N_CTX // PRE_BLOCK, BATCH * N_HEAD)
         delta = torch.empty_like(M)
         _attn_bwd_preprocess[pre_grid](
             o, do,  #
@@ -558,7 +573,9 @@ class _attention(torch.autograd.Function):
             BATCH, N_HEAD, N_CTX,  #
             BLOCK_M=PRE_BLOCK, HEAD_DIM=ctx.HEAD_DIM  #
         )
-        grid = (N_CTX // BLOCK_N1, 1, BATCH * N_HEAD)
+        # Also update this grid calculation:
+        grid = (triton.cdiv(N_CTX, BLOCK_N1), 1, BATCH * N_HEAD)
+        # grid = (N_CTX // BLOCK_N1, 1, BATCH * N_HEAD)
         _attn_bwd[grid](
             q, arg_k, v, ctx.sm_scale, do, dq, dk, dv,  #
             M, delta,  #
