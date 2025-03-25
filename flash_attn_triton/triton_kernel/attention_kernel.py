@@ -385,20 +385,21 @@ def _attn_bwd_dq(dq, q, K, V,  #
     return dq
 
 
+
 @triton.jit
-def _attn_bwd(Q, K, V, sm_scale,  #
-              DO,  #
-              DQ, DK, DV,  #
+def _attn_bwd(Q, K, V, sm_scale,
+              DO,
+              DQ, DK, DV,
               M, D,
               dropout_p, dropout_seed,
               # shared by Q/K/V/DO.
-              stride_z, stride_h, stride_tok, stride_d,  #
-              H, N_CTX,  #
-              BLOCK_M1: tl.constexpr,  #
-              BLOCK_N1: tl.constexpr,  #
-              BLOCK_M2: tl.constexpr,  #
-              BLOCK_N2: tl.constexpr,  #
-              BLK_SLICE_FACTOR: tl.constexpr,  #
+              stride_z, stride_h, stride_tok, stride_d,
+              H, N_CTX,
+              BLOCK_M1: tl.constexpr,
+              BLOCK_N1: tl.constexpr,
+              BLOCK_M2: tl.constexpr,
+              BLOCK_N2: tl.constexpr,
+              BLK_SLICE_FACTOR: tl.constexpr,
               HEAD_DIM: tl.constexpr,
               USE_DROPOUT: tl.constexpr,
               CAUSAL: tl.constexpr,
@@ -437,52 +438,69 @@ def _attn_bwd(Q, K, V, sm_scale,  #
     k = tl.load(K + offs_n[:, None] * stride_tok + offs_k[None, :] * stride_d)
     v = tl.load(V + offs_n[:, None] * stride_tok + offs_k[None, :] * stride_d)
 
-    num_steps = BLOCK_N1 // MASK_BLOCK_M1
+    if CAUSAL:
+        # For causal attention, we need to handle the masked (diagonal) blocks first
+        num_steps = BLOCK_N1 // MASK_BLOCK_M1
+        dk, dv = _attn_bwd_dkdv(dk, dv,
+                                Q, k, v, sm_scale,
+                                DO,
+                                M, D,
+                                dropout_p, dropout_seed,
+                                stride_tok, stride_d,
+                                H, N_CTX,
+                                MASK_BLOCK_M1, BLOCK_N1, HEAD_DIM,
+                                start_n, start_m, num_steps,
+                                MASK=True,  # Use masking for causal section
+                                USE_DROPOUT=USE_DROPOUT,
+                                IS_BF16=IS_BF16
+                                )
+        start_m += num_steps * MASK_BLOCK_M1
+        num_steps = (N_CTX - start_m) // BLOCK_M1
+        
+        # Then handle the non-masked blocks
+        if num_steps > 0:
+            dk, dv = _attn_bwd_dkdv(
+                dk, dv,
+                Q, k, v, sm_scale,
+                DO,
+                M, D,
+                dropout_p, dropout_seed,
+                stride_tok, stride_d,
+                H, N_CTX,
+                BLOCK_M1, BLOCK_N1, HEAD_DIM,
+                start_n, start_m, num_steps,
+                MASK=False,
+                USE_DROPOUT=USE_DROPOUT,
+                IS_BF16=IS_BF16
+            )
+    else:
+        # For non-causal attention, process all blocks without masking
+        # This is the key difference for supporting non-causal backward pass
+        num_steps = N_CTX // BLOCK_M1
+        dk, dv = _attn_bwd_dkdv(
+            dk, dv,
+            Q, k, v, sm_scale,
+            DO,
+            M, D,
+            dropout_p, dropout_seed,
+            stride_tok, stride_d,
+            H, N_CTX,
+            BLOCK_M1, BLOCK_N1, HEAD_DIM,
+            start_n, 0, num_steps,
+            MASK=False,  # No masking for non-causal attention
+            USE_DROPOUT=USE_DROPOUT,
+            IS_BF16=IS_BF16
+        )
 
-    dk, dv = _attn_bwd_dkdv(dk, dv,  #
-                            Q, k, v, sm_scale,  #
-                            DO,  #
-                            M, D,  #
-                            dropout_p, dropout_seed,  #
-                            stride_tok, stride_d,  #
-                            H, N_CTX,  #
-                            MASK_BLOCK_M1, BLOCK_N1, HEAD_DIM,  #
-                            start_n, start_m, num_steps,  #
-                            MASK=CAUSAL, USE_DROPOUT=USE_DROPOUT,
-                            IS_BF16=IS_BF16
-                            )
-
-    start_m += num_steps * MASK_BLOCK_M1
-    num_steps = (N_CTX - start_m) // BLOCK_M1
-
-    # Compute dK and dV for non-masked blocks.
-    dk, dv = _attn_bwd_dkdv(  #
-        dk, dv,  #
-        Q, k, v, sm_scale,  #
-        DO,  #
-        M, D,  #
-        dropout_p, dropout_seed,  #
-        stride_tok, stride_d,  #
-        H, N_CTX,  #
-        BLOCK_M1, BLOCK_N1, HEAD_DIM,  #
-        start_n, start_m, num_steps,  #
-        MASK=False, USE_DROPOUT=USE_DROPOUT,
-        IS_BF16=IS_BF16 #
-    )
-
+    # Store dV and dK
     dv_ptrs = DV + offs_n[:, None] * stride_tok + offs_k[None, :] * stride_d
     tl.store(dv_ptrs, dv)
-
-    # Write back dK.
     dk *= sm_scale
     dk_ptrs = DK + offs_n[:, None] * stride_tok + offs_k[None, :] * stride_d
     tl.store(dk_ptrs, dk)
 
-    # THIS BLOCK DOES DQ:
+    # Calculate dQ
     start_m = pid * BLOCK_M2
-    end_n = start_m + BLOCK_M2
-
-    MASK_BLOCK_N2: tl.constexpr = BLOCK_N2 // BLK_SLICE_FACTOR
     offs_m = start_m + tl.arange(0, BLOCK_M2)
 
     q = tl.load(Q + offs_m[:, None] * stride_tok + offs_k[None, :] * stride_d)
@@ -492,36 +510,56 @@ def _attn_bwd(Q, K, V, sm_scale,  #
     m = tl.load(M + offs_m)
     m = m[:, None]
 
-    # Compute dQ for masked (diagonal) blocks.
-    # NOTE: This code scans each row of QK^T backward (from right to left,
-    # but inside each call to _attn_bwd_dq, from left to right), but that's
-    # not due to anything important.  I just wanted to reuse the loop
-    # structure for dK & dV above as much as possible.
-    num_steps = BLOCK_M2 // MASK_BLOCK_N2
-    dq = _attn_bwd_dq(dq, q, K, V,  #
-                      do, m, D,  #
-                      dropout_p, dropout_seed,  #
-                      stride_tok, stride_d,  #
-                      H, N_CTX,  #
-                      BLOCK_M2, MASK_BLOCK_N2, HEAD_DIM,  #
-                      start_m, end_n - num_steps * MASK_BLOCK_N2, num_steps,  #
-                      MASK=CAUSAL, USE_DROPOUT=USE_DROPOUT,  #
-                      IS_BF16=IS_BF16
-                      )
-    end_n -= num_steps * MASK_BLOCK_N2
-    # stage 2
-    num_steps = end_n // BLOCK_N2
-    dq = _attn_bwd_dq(dq, q, K, V,  #
-                      do, m, D,  #
-                      dropout_p, dropout_seed,  #
-                      stride_tok, stride_d,  #
-                      H, N_CTX,  #
-                      BLOCK_M2, BLOCK_N2, HEAD_DIM,  #
-                      start_m, end_n - num_steps * BLOCK_N2, num_steps,  #
-                      MASK=False, USE_DROPOUT=USE_DROPOUT,  #
-                      IS_BF16=IS_BF16
-                      )
-    # Write back dQ.
+    if CAUSAL:
+        # For causal attention, handle both masked and non-masked parts
+        end_n = start_m + BLOCK_M2
+        MASK_BLOCK_N2: tl.constexpr = BLOCK_N2 // BLK_SLICE_FACTOR
+        
+        # Compute dQ for masked (diagonal) blocks
+        num_steps = BLOCK_M2 // MASK_BLOCK_N2
+        dq = _attn_bwd_dq(dq, q, K, V,
+                          do, m, D,
+                          dropout_p, dropout_seed,
+                          stride_tok, stride_d,
+                          H, N_CTX,
+                          BLOCK_M2, MASK_BLOCK_N2, HEAD_DIM,
+                          start_m, end_n - num_steps * MASK_BLOCK_N2, num_steps,
+                          MASK=True,
+                          USE_DROPOUT=USE_DROPOUT,
+                          IS_BF16=IS_BF16
+                          )
+        end_n -= num_steps * MASK_BLOCK_N2
+        
+        # Compute dQ for non-masked blocks (if any)
+        if end_n > 0:
+            num_steps = end_n // BLOCK_N2
+            dq = _attn_bwd_dq(dq, q, K, V,
+                              do, m, D,
+                              dropout_p, dropout_seed,
+                              stride_tok, stride_d,
+                              H, N_CTX,
+                              BLOCK_M2, BLOCK_N2, HEAD_DIM,
+                              start_m, 0, num_steps,
+                              MASK=False,
+                              USE_DROPOUT=USE_DROPOUT,
+                              IS_BF16=IS_BF16
+                              )
+    else:
+        # For non-causal attention, process all tokens without masking
+        num_steps = N_CTX // BLOCK_N2
+        dq = _attn_bwd_dq(dq, q, K, V,
+                          do, m, D,
+                          dropout_p, dropout_seed,
+                          stride_tok, stride_d,
+                          H, N_CTX,
+                          BLOCK_M2, BLOCK_N2, HEAD_DIM,
+                          start_m, 0, num_steps,
+                          MASK=False,  # No masking for non-causal
+                          USE_DROPOUT=USE_DROPOUT,
+                          IS_BF16=IS_BF16
+                          )
+
+    # Write back dQ
     dq_ptrs = DQ + offs_m[:, None] * stride_tok + offs_k[None, :] * stride_d
     dq *= LN2
     tl.store(dq_ptrs, dq)
@@ -576,14 +614,14 @@ class _attention(torch.autograd.Function):
         if not do.is_contiguous():
             do = do.contiguous()
         assert q.stride() == k.stride() == v.stride() == o.stride() == do.stride()
-        dq = torch.empty_like(q)
-        dk = torch.empty_like(k)
-        dv = torch.empty_like(v)
+        dq = torch.zeros_like(q)
+        dk = torch.zeros_like(k)
+        dv = torch.zeros_like(v)
         BATCH, N_HEAD, N_CTX = q.shape[:3]
         PRE_BLOCK = 128
         NUM_WARPS, NUM_STAGES = 4, 3
-        BLOCK_M1, BLOCK_N1, BLOCK_M2, BLOCK_N2 = 32, 64, 128, 32
-        BLK_SLICE_FACTOR = 1
+        BLOCK_M1, BLOCK_N1, BLOCK_M2, BLOCK_N2 = 32, 128, 128, 32
+        BLK_SLICE_FACTOR = 2
         RCP_LN2 = 1.4426950408889634  # = 1.0 / ln(2)
         arg_k = k
         arg_k = arg_k * (ctx.sm_scale * RCP_LN2)
