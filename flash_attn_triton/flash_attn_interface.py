@@ -82,8 +82,11 @@ def flash_attn_func(q, k, v, dropout_p=0.0, softmax_scale=None, causal=False,
     
     # Transpose the output back to the expected shape [batch, seq_len, heads, head_dim]
     out = out.transpose(1, 2).contiguous()  # Ensure output is contiguous
-    
-    return out
+
+    if return_attn_probs:
+        return out, None, None
+    else:
+        return out
 
 def flash_attn_qkvpacked_func(qkv, dropout_p=0.0, softmax_scale=None, causal=False,
                               window_size=(-1, -1), alibi_slopes=None, deterministic=False,
