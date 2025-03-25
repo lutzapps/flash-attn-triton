@@ -10,7 +10,8 @@ from typing import Optional, Tuple, Union
 from .triton_kernel.attention_kernel import attention
 
 def flash_attn_func(q, k, v, dropout_p=0.0, softmax_scale=None, causal=False,
-                    window_size=(-1, -1), alibi_slopes=None, deterministic=False):
+                    window_size=(-1, -1), alibi_slopes=None, deterministic=False,
+                    return_attn_probs=False):
     """Flash Attention implementation using Triton kernel.
     
     Arguments:
@@ -27,6 +28,8 @@ def flash_attn_func(q, k, v, dropout_p=0.0, softmax_scale=None, causal=False,
             (not supported in this implementation).
         deterministic: bool. Whether to use the deterministic implementation of the backward pass
             (not supported in this implementation).
+        return_attn_probs: bool. Whether to return attention probabilities (not supported in this
+            implementation).
             
     Return:
         out: (batch_size, seqlen, nheads, headdim).
@@ -40,7 +43,10 @@ def flash_attn_func(q, k, v, dropout_p=0.0, softmax_scale=None, causal=False,
         print("Warning: ALiBi is not supported in this Triton implementation")
     if deterministic:
         print("Warning: deterministic backward pass is not built into this Triton implementation")
+    if return_attn_probs:
+        print("Warning: returning attention probabilities is not built into this Triton implementation")
     
+        
     # Ensure tensors are contiguous
     q = q.contiguous() if not q.is_contiguous() else q
     k = k.contiguous() if not k.is_contiguous() else k
@@ -80,7 +86,8 @@ def flash_attn_func(q, k, v, dropout_p=0.0, softmax_scale=None, causal=False,
     return out
 
 def flash_attn_qkvpacked_func(qkv, dropout_p=0.0, softmax_scale=None, causal=False,
-                             window_size=(-1, -1), alibi_slopes=None, deterministic=False):
+                              window_size=(-1, -1), alibi_slopes=None, deterministic=False,
+                              return_attn_probs=False):
     """Flash Attention for packed QKV using Triton kernel.
     
     Arguments:
@@ -95,6 +102,8 @@ def flash_attn_qkvpacked_func(qkv, dropout_p=0.0, softmax_scale=None, causal=Fal
             (not supported in this implementation).
         deterministic: bool. Whether to use the deterministic implementation of the backward pass
             (not supported in this implementation).
+        return_attn_probs: bool. Whether to return attention probabilities (not supported in this
+            implementation).
             
     Return:
         out: (batch_size, seqlen, nheads, headdim).
@@ -108,7 +117,7 @@ def flash_attn_qkvpacked_func(qkv, dropout_p=0.0, softmax_scale=None, causal=Fal
     
     # Call the unpacked version
     return flash_attn_func(
-        q, k, v, dropout_p, softmax_scale, causal, window_size, alibi_slopes, deterministic
+        q, k, v, dropout_p, softmax_scale, causal, window_size, alibi_slopes, deterministic, return_attn_probs
     )
 
 
