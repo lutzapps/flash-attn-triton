@@ -63,7 +63,7 @@ This implementation does not currently support:
 
 ## Benchmarks
 
-# RTX 3090 (Ampere)
+### RTX 3090 (Ampere)
 
 ```
 fused-attention-batch4-head32-d64-fwd-causal=True-dropout=0.0:
