@@ -201,6 +201,7 @@ def flash_attn_with_kvcache(
     rotary_sin=None,
     cache_seqlens=None,
     cache_batch_idx=None,
+    cache_leftpad=None,
     block_table=None,
     softmax_scale=None,
     causal=False,
@@ -208,72 +209,19 @@ def flash_attn_with_kvcache(
     rotary_interleaved=True,
     alibi_slopes=None,
 ):
-    """Flash attention with KV cache, limited implementation.
-    
-    Note: This implementation has significant limitations compared to the full Flash Attention 2 API.
-    It doesn't support many features like in-place KV cache updates, paged KV cache, or rotary embeddings.
-    
-    Arguments:
-        q: (batch_size, seqlen, nheads, headdim)
-        k_cache: (batch_size_cache, seqlen_cache, nheads_k, headdim)
-        v_cache: (batch_size_cache, seqlen_cache, nheads_k, headdim)
-        k: Optional new keys to be appended to k_cache
-        v: Optional new values to be appended to v_cache
-        rotary_cos, rotary_sin: Rotary embeddings (not supported)
-        cache_seqlens: Sequence lengths for the cache (not supported)
-        cache_batch_idx: Batch indices for the cache (not supported)
-        block_table: For paged KV cache (not supported)
-        softmax_scale: Softmax scale
-        causal: Whether to apply causal masking
-        window_size: For local attention (not supported)
-        rotary_interleaved: Rotary embedding style (not supported)
-        alibi_slopes: For ALiBi (not supported)
-        
-    Returns:
-        out: (batch_size, seqlen, nheads, headdim)
-    """
-    print("Warning: flash_attn_with_kvcache is a limited implementation that doesn't support most KV cache features")
-    
-    # Check if we're using features not supported by this implementation
-    if rotary_cos is not None or rotary_sin is not None:
-        print("Warning: rotary embeddings are not supported in this implementation")
-    if cache_seqlens is not None:
-        print("Warning: cache_seqlens is not supported in this implementation")
-    if cache_batch_idx is not None:
-        print("Warning: cache_batch_idx is not supported in this implementation")
-    if block_table is not None:
-        print("Warning: paged KV cache is not supported in this implementation")
-    if window_size != (-1, -1):
-        print("Warning: sliding window attention is not supported in this implementation")
-    if alibi_slopes is not None:
-        print("Warning: ALiBi is not supported in this implementation")
-    
-    # Ensure inputs are contiguous
-    q = q.contiguous() if not q.is_contiguous() else q
-    k_cache = k_cache.contiguous() if not k_cache.is_contiguous() else k_cache
-    v_cache = v_cache.contiguous() if not v_cache.is_contiguous() else v_cache
-    
-    # Basic implementation without proper KV cache updates
-    batch_size = q.shape[0]
-    
-    # If we have new k and v, concatenate them to the cache (without in-place updates)
-    if k is not None and v is not None:
-        # Ensure new k, v are contiguous
-        k = k.contiguous() if not k.is_contiguous() else k
-        v = v.contiguous() if not v.is_contiguous() else v
-        
-        if k_cache.shape[0] != batch_size or v_cache.shape[0] != batch_size:
-            raise ValueError("Batch size mismatch between query and KV cache")
-        
-        # Simple concatenation (not in-place)
-        k_full = torch.cat([k_cache, k], dim=1)
-        v_full = torch.cat([v_cache, v], dim=1)
-    else:
-        k_full = k_cache
-        v_full = v_cache
-    
-    # Run attention with the full KV tensors
-    return flash_attn_func(q, k_full, v_full, dropout_p=0.0, softmax_scale=softmax_scale, causal=causal)
+    raise NotImplementedError
+
+def flash_attn_varlen_func(*args, **kwargs):
+    raise NotImplementedError
+
+
+def flash_attn_varlen_kvpacked_func(*args, **kwargs):
+    raise NotImplementedError
+
+
+def flash_attn_varlen_qkvpacked_func(*args, **kwargs):
+    raise NotImplementedError
+
 
 class FlashAttention(torch.nn.Module):
     """
@@ -311,3 +259,5 @@ class FlashAttention(torch.nn.Module):
             softmax_scale=self.softmax_scale,
             causal=causal
         )
+
+    
