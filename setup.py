@@ -14,14 +14,14 @@ setuptools.setup(
     long_description_content_type="text/markdown",
     url="https://github.com/rationalism/flash-attn-triton",
     project_urls={
-        "Bug Tracker": "https://github.com/username/flash-attn-triton/issues",
+        "Bug Tracker": "https://github.com/rationalism/flash-attn-triton/issues",
     },
     classifiers=[
         "Programming Language :: Python :: 3",
         "License :: OSI Approved :: BSD License",
         "Operating System :: OS Independent",
     ],
-    packages=setuptools.find_packages() + ['flash_attn'],
+    packages=setuptools.find_packages(),
     python_requires=">=3.8",
     install_requires=[
         "einops",
