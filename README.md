@@ -24,10 +24,10 @@ pip install flash-attn-triton
 
 ## Usage
 
-The API is designed to be compatible with Flash Attention 2. You can use it in the same way:
+The API is designed to be a drop-in replacement for Flash Attention 2. You can use it in the same way:
 
 ```python
-from flash_attn_triton import flash_attn_func, flash_attn_qkvpacked_func, FlashAttention
+from flash_attn import flash_attn_func, flash_attn_qkvpacked_func, FlashAttention
 
 # Basic usage
 out = flash_attn_func(q, k, v, causal=True)
