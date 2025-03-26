@@ -65,6 +65,7 @@ This implementation does not currently support:
 
 # RTX 3090 (Ampere)
 
+```
 fused-attention-batch4-head32-d64-fwd-causal=True-dropout=0.0:
      N_CTX  Triton [FP16]
 0   1024.0      48.049147
@@ -93,6 +94,7 @@ fused-attention-batch4-head32-d64-bwd-causal=False-dropout=0.0:
 2   4096.0      49.984253
 3   8192.0      51.358497
 4  16384.0      49.913040
+```
 
 ## Acknowledgements
 
