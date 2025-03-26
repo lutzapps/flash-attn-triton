@@ -1,6 +1,6 @@
 # Flash Attention Triton
 
-This repository provides a wrapper for the Triton implementation of the Flash Attention algorithm with a Flash Attention 2 compatible API. It allows for a drop-in replacement of the original Flash Attention 2 package for supported functionality. This package provides support for Turing (eg. 2080 Ti, T4) and Volta (V100) GPUs not supported by the original FA2 CUDA package.
+This repository provides a wrapper for the Triton implementation of the Flash Attention algorithm with a Flash Attention 2 compatible API. It allows for a drop-in replacement of the original Flash Attention 2 package for supported functionality. This package provides support for Turing (eg. 2080 Ti, T4) GPUs not supported by the original FA2 CUDA package.
 
 ## Installation
 
@@ -20,7 +20,7 @@ pip install flash-attn-triton
 
 - PyTorch 2.6 or later
 - Triton 3.2 or later
-- CUDA-compatible GPU (compute capability 7.0+)
+- CUDA-compatible GPU (compute capability 7.5+)
 
 ## Usage
 
@@ -43,11 +43,12 @@ out = flash_attn(q, k, v, causal=True)
 ## Currently Supported Features
 
 - Basic attention mechanism (forward and backward)
+- FP16 and BF16 (BF16 only on Ampere and above)
 - Causal masking
 - Softmax scaling
 - Basic MQA/GQA support (via tensor repetition)
 - Head dims 16, 32, 64, 128
-- Ampere, Turing, Volta cards
+- Ampere, Turing cards
 
 ## Limitations
 
@@ -55,7 +56,7 @@ This implementation does not currently support:
 
 - Non-causal attention for sequence lengths not divisible by 128
 - Dropout (in progress)
-- Pascal and earlier cards (in progress)
+- Volta, Pascal, and earlier cards (in progress)
 - Attention bias
 - Sliding window attention
 - ALiBi
