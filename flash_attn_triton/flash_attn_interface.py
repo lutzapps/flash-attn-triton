@@ -9,6 +9,8 @@ from typing import Optional, Tuple, Union
 # Import the attention function from the Triton kernel implementation
 from .triton_kernel.attention_kernel import attention
 
+BLOCK_SIZE = 128
+
 def flash_attn_func(q, k, v, dropout_p=0.0, softmax_scale=None, causal=False,
                     window_size=(-1, -1), alibi_slopes=None, deterministic=False,
                     softcap=0.0,
@@ -46,7 +48,6 @@ def flash_attn_func(q, k, v, dropout_p=0.0, softmax_scale=None, causal=False,
         print("Warning: deterministic backward pass is not built into this Triton implementation")
     if return_attn_probs:
         print("Warning: returning attention probabilities is not built into this Triton implementation")
-    
         
     # Ensure tensors are contiguous
     q = q.contiguous() if not q.is_contiguous() else q
@@ -56,6 +57,32 @@ def flash_attn_func(q, k, v, dropout_p=0.0, softmax_scale=None, causal=False,
     # Validate input shapes
     batch_size, seq_len_q, n_heads_q, head_dim = q.shape
     _, seq_len_k, n_heads_k, _ = k.shape
+
+    if (not causal) and seq_len_q % BLOCK_SIZE != 0:
+        raise ValueError("Warning: Non-causal attention only works with block sizes divisible by 128 in this Triton implementation")
+
+    # Save original sequence lengths for unpadding later
+    original_seq_len_q = seq_len_q
+    original_seq_len_k = seq_len_k
+    
+    # Check if sequence lengths are multiples of 128 and pad if necessary
+    pad_q = (BLOCK_SIZE - seq_len_q % BLOCK_SIZE) % BLOCK_SIZE
+    pad_k = (BLOCK_SIZE - seq_len_k % BLOCK_SIZE) % BLOCK_SIZE
+    
+    if pad_q > 0:
+        q_padding = torch.zeros(batch_size, pad_q, n_heads_q, head_dim, 
+                               dtype=q.dtype, device=q.device)
+        q = torch.cat([q, q_padding], dim=1)
+        seq_len_q += pad_q
+    
+    if pad_k > 0:
+        k_padding = torch.zeros(batch_size, pad_k, n_heads_k, head_dim, 
+                               dtype=k.dtype, device=k.device)
+        v_padding = torch.zeros(batch_size, pad_k, n_heads_k, head_dim, 
+                               dtype=v.dtype, device=v.device)
+        k = torch.cat([k, k_padding], dim=1)
+        v = torch.cat([v, v_padding], dim=1)
+        seq_len_k += pad_k
     
     # Check if we're dealing with MQA/GQA (not fully supported)
     if n_heads_q != n_heads_k:
@@ -84,10 +111,15 @@ def flash_attn_func(q, k, v, dropout_p=0.0, softmax_scale=None, causal=False,
     # Transpose the output back to the expected shape [batch, seq_len, heads, head_dim]
     out = out.transpose(1, 2).contiguous()  # Ensure output is contiguous
 
+    # Slice the output to remove padding
+    if pad_q > 0:
+        out = out[:, :original_seq_len_q, :, :]
+
     if return_attn_probs:
         return out, None, None
     else:
         return out
+    
 
 def flash_attn_qkvpacked_func(qkv, dropout_p=0.0, softmax_scale=None, causal=False,
                               window_size=(-1, -1), alibi_slopes=None, deterministic=False, softcap=0.0,
