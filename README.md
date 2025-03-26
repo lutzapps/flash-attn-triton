@@ -57,6 +57,7 @@ This implementation does not currently support:
 - Non-causal attention for sequence lengths not divisible by 128
 - Dropout (in progress)
 - Volta, Pascal, and earlier cards (in progress)
+- varlen/unpadded support
 - Attention bias
 - Sliding window attention
 - ALiBi
