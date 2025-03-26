@@ -688,7 +688,7 @@ def attention(q, k, v, causal=False, sm_scale=None, dropout_p=0.0, dropout_seed=
 
 @pytest.mark.parametrize("Z, H, N_CTX, HEAD_DIM", [(1, 2, 1024, 64)])
 @pytest.mark.parametrize("causal", [True])
-@pytest.mark.parametrize("dropout_p", [0.0, 0.1])
+@pytest.mark.parametrize("dropout_p", [0.0])
 def test_op(Z, H, N_CTX, HEAD_DIM, causal, dropout_p, dtype=torch.float16):
     torch.manual_seed(20)
     q = (torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device=DEVICE).normal_(mean=0.0, std=0.5).requires_grad_())
@@ -746,9 +746,7 @@ BATCH, N_HEADS, HEAD_DIM = 4, 32, 64
 configs = []
 for mode in ["fwd", "bwd"]:
     for causal in [True, False]:
-        for dropout_p in [0.0, 0.1]:
-            if mode == "bwd" and not causal:
-                continue
+        for dropout_p in [0.0]:
             configs.append(
                 triton.testing.Benchmark(
                     x_names=["N_CTX"],

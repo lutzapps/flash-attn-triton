@@ -20,7 +20,7 @@ pip install flash-attn-triton
 
 - PyTorch 2.6 or later
 - Triton 3.2 or later
-- CUDA-compatible GPU (compute capability 5.0+)
+- CUDA-compatible GPU (compute capability 7.0+)
 
 ## Usage
 
@@ -42,22 +42,22 @@ out = flash_attn(q, k, v, causal=True)
 
 ## Currently Supported Features
 
-- Basic attention mechanism
+- Basic attention mechanism (forward and backward)
 - Causal masking
 - Softmax scaling
 - Basic MQA/GQA support (via tensor repetition)
+- Head dims 16, 32, 64, 128
 
 ## Limitations
 
 This implementation does not currently support:
 
-- Dropout
+- Non-causal attention for sequence lengths not divisible by 128
+- Dropout (in progress)
 - Attention bias
 - Sliding window attention
 - ALiBi
-- Rotary embeddings
 - KV caching with in-place updates
-- Paged KV cache
 - Softcapping
 - Deterministic backward pass
 
