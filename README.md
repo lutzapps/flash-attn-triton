@@ -61,6 +61,39 @@ This implementation does not currently support:
 - Softcapping
 - Deterministic backward pass
 
+## Benchmarks
+
+# RTX 3090 (Ampere)
+
+fused-attention-batch4-head32-d64-fwd-causal=True-dropout=0.0:
+     N_CTX  Triton [FP16]
+0   1024.0      48.049147
+1   2048.0      61.062769
+2   4096.0      68.363188
+3   8192.0      70.768167
+4  16384.0      72.332634
+fused-attention-batch4-head32-d64-fwd-causal=False-dropout=0.0:
+     N_CTX  Triton [FP16]
+0   1024.0      60.190653
+1   2048.0      71.126662
+2   4096.0      69.049310
+3   8192.0      74.579215
+4  16384.0      73.911621
+fused-attention-batch4-head32-d64-bwd-causal=True-dropout=0.0:
+     N_CTX  Triton [FP16]
+0   1024.0      33.531732
+1   2048.0      40.884683
+2   4096.0      45.627974
+3   8192.0      47.449394
+4  16384.0      48.993511
+fused-attention-batch4-head32-d64-bwd-causal=False-dropout=0.0:
+     N_CTX  Triton [FP16]
+0   1024.0      42.834959
+1   2048.0      46.382862
+2   4096.0      49.984253
+3   8192.0      51.358497
+4  16384.0      49.913040
+
 ## Acknowledgements
 
 This implementation is based on the Triton attention implementation from the original Flash Attention 2 repository by TriDao and the Triton tutorial on fused attention.
