@@ -1,6 +1,6 @@
 # Flash Attention Triton
 
-This repository provides a Triton-based implementation of the Flash Attention algorithm with a Flash Attention 2 compatible API. It allows for a drop-in replacement of the original Flash Attention 2 package for supported functionality.
+This repository provides a wrapper for the Triton implementation of the Flash Attention algorithm with a Flash Attention 2 compatible API. It allows for a drop-in replacement of the original Flash Attention 2 package for supported functionality. This package provides support for Turing (eg. 2080 Ti, T4) and Volta (V100) GPUs not supported by the original FA2 CUDA package.
 
 ## Installation
 
@@ -47,6 +47,7 @@ out = flash_attn(q, k, v, causal=True)
 - Softmax scaling
 - Basic MQA/GQA support (via tensor repetition)
 - Head dims 16, 32, 64, 128
+- Ampere, Turing, Volta cards
 
 ## Limitations
 
@@ -54,6 +55,7 @@ This implementation does not currently support:
 
 - Non-causal attention for sequence lengths not divisible by 128
 - Dropout (in progress)
+- Pascal and earlier cards (in progress)
 - Attention bias
 - Sliding window attention
 - ALiBi
@@ -94,6 +96,39 @@ fused-attention-batch4-head32-d64-bwd-causal=False-dropout=0.0:
 2   4096.0      49.984253
 3   8192.0      51.358497
 4  16384.0      49.913040
+```
+
+### RTX 2080 Ti (Turing)
+
+```
+fused-attention-batch4-head32-d64-fwd-causal=True-dropout=0.0:
+     N_CTX  Triton [FP16]
+0   1024.0      29.258471
+1   2048.0      41.382117
+2   4096.0      46.972266
+3   8192.0      49.315714
+4  16384.0      50.443531
+fused-attention-batch4-head32-d64-fwd-causal=False-dropout=0.0:
+     N_CTX  Triton [FP16]
+0   1024.0      38.110175
+1   2048.0      47.640577
+2   4096.0      50.301599
+3   8192.0      51.136501
+4  16384.0      51.826783
+fused-attention-batch4-head32-d64-bwd-causal=True-dropout=0.0:
+     N_CTX  Triton [FP16]
+0   1024.0      22.085938
+1   2048.0      26.173398
+2   4096.0      28.565586
+3   8192.0      30.030201
+4  16384.0      31.082861
+fused-attention-batch4-head32-d64-bwd-causal=False-dropout=0.0:
+     N_CTX  Triton [FP16]
+0   1024.0      27.756566
+1   2048.0      30.274265
+2   4096.0      31.471025
+3   8192.0      32.253811
+4  16384.0      32.614130
 ```
 
 ## Acknowledgements
